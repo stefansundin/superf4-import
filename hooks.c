@@ -24,13 +24,49 @@
 static int ctrl=0;
 static int alt=0;
 static int win=0;
-static FILE *log;
+static char msg[100];
+static FILE *output;
 
 static HINSTANCE hinstDLL;
 static HHOOK mousehook;
 static int hook_installed=0;
 
-static char txt[100];
+BOOL SetPrivilege(HANDLE hToken, LPCTSTR priv, BOOL bEnablePrivilege) {
+	TOKEN_PRIVILEGES tp;
+	LUID luid;
+	TOKEN_PRIVILEGES tpPrevious;
+	DWORD cbPrevious=sizeof(TOKEN_PRIVILEGES);
+
+	if (!LookupPrivilegeValue(NULL, priv, &luid)) {
+		return FALSE;
+	}
+	
+	//Get current privileges
+	tp.PrivilegeCount=1;
+	tp.Privileges[0].Luid=luid;
+	tp.Privileges[0].Attributes=0;
+
+	if (AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(TOKEN_PRIVILEGES), &tpPrevious, &cbPrevious) != 0 && GetLastError() != ERROR_SUCCESS) {
+		return FALSE;
+	}
+
+	//Set privileges
+	tpPrevious.PrivilegeCount=1;
+	tpPrevious.Privileges[0].Luid=luid;
+
+	if(bEnablePrivilege) {
+		tpPrevious.Privileges[0].Attributes |= (SE_PRIVILEGE_ENABLED);
+	}
+	else {
+		tpPrevious.Privileges[0].Attributes ^= (SE_PRIVILEGE_ENABLED & tpPrevious.Privileges[0].Attributes);
+	}
+
+	if (AdjustTokenPrivileges(hToken, FALSE, &tpPrevious, cbPrevious, NULL, NULL) != 0 && GetLastError() != ERROR_SUCCESS) {
+		return FALSE;
+	}
+
+	return TRUE;
+}
 
 char* GetTimestamp(char *buf, size_t maxsize, char *format) {
 	time_t rawtime;
@@ -42,7 +78,7 @@ char* GetTimestamp(char *buf, size_t maxsize, char *format) {
 }
 
 void Kill(HWND hwnd) {
-	fprintf(log,"%s ",GetTimestamp(txt,sizeof(txt),"[%Y-%m-%d %H:%M:%S]"));
+	fprintf(output,"%s ",GetTimestamp(msg,sizeof(msg),"[%Y-%m-%d %H:%M:%S]"));
 	
 	//Get hwnd title (for log)
 	char title[100];
@@ -52,63 +88,27 @@ void Kill(HWND hwnd) {
 	DWORD pid;
 	GetWindowThreadProcessId(hwnd,&pid);
 	
-	fprintf(log,"Killing \"%s\" (pid %d)... ",title,pid);
-	
-	int SeDebugPrivilege=0;
-	//Get process token
-	HANDLE hToken;
-	TOKEN_PRIVILEGES tkp;
-	if (OpenProcessToken(GetCurrentProcess(),TOKEN_ADJUST_PRIVILEGES|TOKEN_QUERY, &hToken) == 0) {
-		fprintf(log,"failed to get SeDebugPrivilege.\n");
-		fprintf(log,"Error: OpenProcessToken() failed (error: %d) in file %s, line %d.\n",GetLastError(),__FILE__,__LINE__);
-		fprintf(log,"Trying to kill without SeDebugPrivilege... ");
-		fflush(log);
-	}
-	else {
-		//Get LUID for SeDebugPrivilege
-		LookupPrivilegeValue(NULL, SE_DEBUG_NAME, &tkp.Privileges[0].Luid);
-		tkp.PrivilegeCount=1;
-		tkp.Privileges[0].Attributes=SE_PRIVILEGE_ENABLED;
-		
-		//Enable SeDebugPrivilege
-		AdjustTokenPrivileges(hToken, FALSE, &tkp, 0, NULL, 0); 
-		if (GetLastError() != ERROR_SUCCESS) {
-			fprintf(log,"failed to get SeDebugPrivilege.\n");
-			fprintf(log,"Error: AdjustTokenPrivileges() failed (error: %d) in file %s, line %d.\n",GetLastError(),__FILE__,__LINE__);
-			fprintf(log,"Trying to kill without SeDebugPrivilege... ");
-			fflush(log);
-		}
-		else {
-			//Got it
-			SeDebugPrivilege=1;
-		}
-	}
+	fprintf(output,"Killing \"%s\" (pid %d)... ",title,pid);
 	
 	//Open the process
 	HANDLE process;
 	if ((process=OpenProcess(PROCESS_TERMINATE,FALSE,pid)) == NULL) {
-		fprintf(log,"failed!\n");
-		fprintf(log,"Error: OpenProcess() failed (error: %d) in file %s, line %d.\n",GetLastError(),__FILE__,__LINE__);
-		fflush(log);
+		fprintf(output,"failed!\n");
+		fprintf(output,"Error: OpenProcess() failed (error: %d) in file %s, line %d.\n",GetLastError(),__FILE__,__LINE__);
+		fflush(output);
 		return;
 	}
 	
 	//Terminate process
 	if (TerminateProcess(process,1) == 0) {
-		fprintf(log,"failed!\n");
-		fprintf(log,"Error: TerminateProcess() failed (error: %d) in file %s, line %d.\n",GetLastError(),__FILE__,__LINE__);
-		fflush(log);
+		fprintf(output,"failed!\n");
+		fprintf(output,"Error: TerminateProcess() failed (error: %d) in file %s, line %d.\n",GetLastError(),__FILE__,__LINE__);
+		fflush(output);
 		return;
 	}
 	
-	//Disable SeDebugPrivilege
-	if (SeDebugPrivilege) {
-		tkp.Privileges[0].Attributes=0;
-		AdjustTokenPrivileges(hToken, FALSE, &tkp, 0, NULL, 0);
-	}
-	
-	fprintf(log,"success!\n");
-	fflush(log);
+	fprintf(output,"success!\n");
+	fflush(output);
 }
 
 _declspec(dllexport) LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
@@ -136,8 +136,8 @@ _declspec(dllexport) LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPA
 					//Get hwnd of foreground window
 					HWND hwnd;
 					if ((hwnd=GetForegroundWindow()) == NULL) {
-						fprintf(log,"%s Error: GetForegroundWindow() failed in file %s, line %d.\n",GetTimestamp(txt,sizeof(txt),"[%Y-%m-%d %H:%M:%S]"),__FILE__,__LINE__);
-						fflush(log);
+						fprintf(output,"Error: GetForegroundWindow() failed in file %s, line %d.",__FILE__,__LINE__);
+						fflush(output);
 						return 0;
 					}
 					
@@ -195,8 +195,8 @@ _declspec(dllexport) LRESULT CALLBACK MouseProc(int nCode, WPARAM wParam, LPARAM
 			//Get hwnd
 			HWND hwnd;
 			if ((hwnd=WindowFromPoint(pt)) == NULL) {
-				fprintf(log,"%s Error getting mouse coordinates.\n",GetTimestamp(txt,sizeof(txt),"[%Y-%m-%d %H:%M:%S]"));
-				fprintf(log,"Error: WindowFromPoint() failed in file %s, line %d.\n",__FILE__,__LINE__);
+				fprintf(output,"%s Error getting mouse coordinates.\n",GetTimestamp(msg,sizeof(msg),"[%Y-%m-%d %H:%M:%S]"));
+				fprintf(output,"WindowFromPoint() failed in file %s, line %d.\n",__FILE__,__LINE__);
 			}
 			hwnd=GetAncestor(hwnd,GA_ROOT);
 			
@@ -228,8 +228,8 @@ int InstallHook() {
 	
 	//Set up the mouse hook
 	if ((mousehook=SetWindowsHookEx(WH_MOUSE_LL,MouseProc,hinstDLL,0)) == NULL) {
-		fprintf(log,"%s Error hooking mouse.\n",GetTimestamp(txt,sizeof(txt),"[%Y-%m-%d %H:%M:%S]"));
-		fprintf(log,"SetWindowsHookEx() failed (error code: %d) in file %s, line %d.\n",GetLastError(),__FILE__,__LINE__);
+		fprintf(output,"%s Error hooking mouse.\n",GetTimestamp(msg,sizeof(msg),"[%Y-%m-%d %H:%M:%S]"));
+		fprintf(output,"SetWindowsHookEx() failed (error code: %d) in file %s, line %d.\n",GetLastError(),__FILE__,__LINE__);
 		return 1;
 	}
 	
@@ -246,8 +246,8 @@ int RemoveHook() {
 	
 	//Remove mouse hook
 	if (UnhookWindowsHookEx(mousehook) == 0) {
-		fprintf(log,"%s Error unhooking mouse.\n",GetTimestamp(txt,sizeof(txt),"[%Y-%m-%d %H:%M:%S]"));
-		fprintf(log,"UnhookWindowsHookEx() failed (error code: %d) in file %s, line %d.\n",GetLastError(),__FILE__,__LINE__);
+		fprintf(output,"%s Error unhooking mouse.\n",GetTimestamp(msg,sizeof(msg),"[%Y-%m-%d %H:%M:%S]"));
+		fprintf(output,"UnhookWindowsHookEx() failed (error code: %d) in file %s, line %d.\n",GetLastError(),__FILE__,__LINE__);
 		return 1;
 	}
 	
@@ -261,13 +261,40 @@ BOOL APIENTRY DllMain(HINSTANCE hInstance, DWORD reason, LPVOID reserved) {
 		hinstDLL=hInstance;
 		
 		//Open log
-		log=fopen("superf4-log.txt","ab");
-		fprintf(log,"\n%s New session.\n",GetTimestamp(txt,sizeof(txt),"[%Y-%m-%d %H:%M:%S]"));
-		fflush(log);
+		output=fopen("superf4-log.txt","ab");
+		fprintf(output,"\n%s ",GetTimestamp(msg,sizeof(msg),"[%Y-%m-%d %H:%M:%S]"));
+		fprintf(output,"New session. Getting SeDebugPrivilege privilege... ");
+		
+		//Create security context
+		if (ImpersonateSelf(SecurityImpersonation) == 0) {
+			fprintf(output,"failed!\n");
+			fprintf(output,"Error: ImpersonateSelf() failed (error: %d) in file %s, line %d.\n",GetLastError(),__FILE__,__LINE__);
+			fflush(output);
+			return TRUE;
+		}
+		//Get access token
+		HANDLE hToken;
+		if (OpenThreadToken(GetCurrentThread(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, FALSE, &hToken) == 0) {
+			fprintf(output,"failed!\n");
+			fprintf(output,"Error: OpenThreadToken() failed (error: %d) in file %s, line %d.\n",GetLastError(),__FILE__,__LINE__);
+			fflush(output);
+			return TRUE;
+		}
+		//Enable SeDebugPrivilege
+		if (SetPrivilege(hToken, SE_DEBUG_NAME, TRUE) == FALSE) {
+			fprintf(output,"failed!\n");
+			fprintf(output,"Error: SetPrivilege() failed (error: %d) in file %s, line %d.\n",GetLastError(),__FILE__,__LINE__);
+			fflush(output);
+			CloseHandle(hToken);
+			return TRUE;
+		}
+		CloseHandle(hToken);
+		fprintf(output,"success!\n");
+		fflush(output);
 	}
-	else if (reason == DLL_PROCESS_DETACH) {
+	else if (reason == DLL_PROCESS_ATTACH) {
 		//Close log
-		fclose(log);
+		fclose(output);
 	}
 
 	return TRUE;
