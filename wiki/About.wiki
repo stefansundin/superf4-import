@@ -25,7 +25,7 @@ Use with care though, since SuperF4 effectively kills the program and doesn't gi
 == Video review ==
 SuperF4 has been featured in [http://revision3.com/tekzilla Tekzilla], so you can watch [http://www.youtube.com/watch?v=LLtxSkoWKfc this video] to see how SuperF4 works before downloading it.
 
-<wiki:gadget border="0" url="http://stefansundin.com/stuff/youtube-iframe.xml" up_id="LLtxSkoWKfc" up_args="start=8&rel=0" width="640" height="390" />
+<wiki:gadget border="0" url="https://gist.githubusercontent.com/stefansundin/8194147/raw/youtube-iframe.xml" up_id="LLtxSkoWKfc" up_args="start=8&rel=0" width="640" height="390" />
 
 
 = Configuration =
